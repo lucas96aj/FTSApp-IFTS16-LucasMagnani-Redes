@@ -1,4 +1,4 @@
-// secure-server.js
+// secure-server.js corregido
 // -------------------------------------------------------------------
 // Servidor TLS: LIST, GET, PUT, DELETE, RENAME
 // -------------------------------------------------------------------
@@ -11,6 +11,12 @@ const PORT = 6000; // Puerto en el que el servidor escuchará
 const CERT_PATH = path.join(__dirname, 'certs', 'server-cert.pem'); // Ruta al certificado del servidor
 const KEY_PATH = path.join(__dirname, 'certs', 'server-key.pem'); // Ruta a la clave privada del servidor
 const ROOT_DIR = path.join(__dirname, 'files'); // Directorio raíz para los archivos del servidor
+
+// Asegurarse de que el directorio 'files' exista
+if (!fs.existsSync(ROOT_DIR)) {
+  fs.mkdirSync(ROOT_DIR, { recursive: true });
+  console.log(`[SERVER] Directorio ${ROOT_DIR} creado.`);
+}
 
 const options = {
   cert: fs.readFileSync(CERT_PATH), // Lee el certificado del servidor
@@ -77,27 +83,41 @@ const server = tls.createServer(options, socket => { // Se ejecuta cuando un cli
           const dest = path.join(ROOT_DIR, filename); // Ruta de destino para guardar el archivo
           console.log(`[SERVER][PUT] Preparado para recibir archivo: ${filename}`); // Imprime mensaje
 
-          socket.write('READY: PUT\n'); // Envía mensaje al cliente indicando que está listo para recibir el archivo
-          socket.removeAllListeners('data'); // Remueve los listeners de 'data' anteriores para evitar interferencia
+          // Notifica al cliente que está listo para recibir
+          socket.write('READY: PUT\n'); 
+          
+          // Remueve los listeners de 'data' anteriores para evitar interferencia
+          socket.removeAllListeners('data'); 
 
-          const ws = fs.createWriteStream(dest); // Crea un stream de escritura para guardar el archivo
-          ws.on('open', () => console.log('[SERVER][PUT] Stream de escritura abierto')); // Imprime cuando se abre el stream de escritura
-          ws.on('error', e => { // Maneja errores al escribir el archivo
-            console.error(`[SERVER][PUT][WRITE ERROR] ${e.message}`);
-            socket.write('ERROR: PUT failed\n', () => socket.end()); // Envía error y cierra
+          // Usa un buffer para almacenar los datos antes de escribirlos en el archivo
+          let fileData = Buffer.from([]);
+          
+          // Escucha datos entrantes
+          socket.on('data', chunk => {
+            fileData = Buffer.concat([fileData, chunk]);
           });
-          ws.on('finish', () => { // Cuando termina de escribir el archivo
-            console.log('[SERVER][PUT] Escritura finalizada — enviando ACK'); // Imprime mensaje
-            socket.write('OK: PUT complete\n'); // Envía ACK (acknowledgment) al cliente
-
-            // Esperamos unos ms para asegurar que el mensaje se transmita
-            setTimeout(() => {
-              console.log('[SERVER][PUT] Cierre seguro tras ACK'); // Imprime mensaje
-              socket.end(); // Cierra el socket después de enviar el ACK
-            }, 50); // Espera mínima para asegurar ACK
+          
+          // Cuando el cliente cierra la escritura
+          socket.on('end', () => {
+            // Escribe todo el archivo de una vez
+            fs.writeFile(dest, fileData, err => {
+              if (err) {
+                console.error(`[SERVER][PUT][WRITE ERROR] ${err.message}`);
+                // Usamos write en lugar de end para asegurarnos que el mensaje llegue
+                socket.write('ERROR: PUT failed\n', () => {
+                  socket.end(); // Cerramos después de confirmar que el mensaje se envió
+                });
+              } else {
+                console.log('[SERVER][PUT] Archivo escrito correctamente');
+                // Usamos write con callback para asegurarnos que el mensaje llegue
+                // antes de cerrar la conexión
+                socket.write('OK: PUT complete\n', () => {
+                  socket.end(); // Cerramos después de confirmar que el mensaje se envió
+                });
+              }
+            });
           });
-
-          socket.pipe(ws); // Recibe los datos del cliente y los escribe en el archivo
+          
           break;
         }
 
@@ -145,6 +165,3 @@ const server = tls.createServer(options, socket => { // Se ejecuta cuando un cli
 server.listen(PORT, () => { // Inicia el servidor y escucha en el puerto especificado
   console.log(`[SERVER] Servidor TLS escuchando en puerto ${PORT}`); // Imprime mensaje
 });
-
-
-
